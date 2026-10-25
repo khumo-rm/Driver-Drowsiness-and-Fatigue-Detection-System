@@ -1,0 +1,28 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import { rateLimit } from 'express-rate-limit';
+import { pinoHttp } from 'pino-http';
+import { config } from './config.js';
+import { authRoutes } from './routes/auth.routes.js';
+import { deviceRoutes } from './routes/device.routes.js';
+import { sessionRoutes } from './routes/session.routes.js';
+import { telemetryRoutes } from './routes/telemetry.routes.js';
+import { dashboardRoutes } from './routes/dashboard.routes.js';
+import { errorHandler, notFound } from './errors.js';
+
+export const app = express();
+app.disable('x-powered-by');
+app.use(helmet());
+app.use(cors({ origin: config.CORS_ORIGIN.split(',').map(v => v.trim()) }));
+app.use(express.json({ limit: '512kb' }));
+app.use(pinoHttp());
+app.use(rateLimit({ windowMs: 60_000, limit: 120, standardHeaders: 'draft-8', legacyHeaders: false }));
+app.get('/health', (_req, res) => res.json({ status: 'ok' }));
+app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/devices', deviceRoutes);
+app.use('/api/v1/sessions', sessionRoutes);
+app.use('/api/v1/telemetry', telemetryRoutes);
+app.use('/api/v1/dashboard', dashboardRoutes);
+app.use(notFound);
+app.use(errorHandler);
