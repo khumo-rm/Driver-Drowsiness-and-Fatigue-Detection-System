@@ -1,0 +1,143 @@
+# For scanner
+
+// --- PIN CONFIGURATION ---
+const int IR_AO_PIN  = 34; // AO pin from HW-870 connected to GPIO 34 (ADC1)
+const int BUZZER_PIN = 4;  // Buzzer signal on GPIO 4
+
+// --- TIMING & CALIBRATION CONSTANTS ---
+const unsigned long DROWSY_ALARM_MS = 2000; // 2.0s continuous closure = Alarm
+const int CALIBRATION_SAMPLES       = 50;   // Baseline samples on boot
+
+// --- CALIBRATION VARS ---
+int openEyeBaselineADC = 0;
+int closureThresholdADC = 0;
+const int REFLECTION_DELTA = 350; // Required ADC drop/increase for eyelid detection
+
+// --- STATE & TELEMETRY TRACKING ---
+unsigned long eyeClosedStartTime = 0;
+bool isEyeClosed = false;
+
+unsigned long windowStartTime = 0;
+int blinkCountInWindow = 0;
+int currentBPM = 0;
+unsigned long lastLogTime = 0;
+
+void setBuzzer(bool enable) {
+  if (enable) {
+    tone(BUZZER_PIN, 2000); // 2kHz alert tone
+  } else {
+    noTone(BUZZER_PIN);
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+}
+
+void calibrateOpenEyeBaseline() {
+  Serial.println("\n==================================================");
+  Serial.println("  OPTICAL AUTO-CALIBRATION: KEEP EYE OPEN & STILL ");
+  Serial.println("==================================================");
+
+  long sum = 0;
+  for (int i = 0; i < CALIBRATION_SAMPLES; i++) {
+    sum += analogRead(IR_AO_PIN);
+    delay(40);
+  }
+
+  openEyeBaselineADC = sum / CALIBRATION_SAMPLES;
+  
+  // On most HW-870 AO setups, skin reflection pulls ADC LOWER or HIGHER.
+  // We establish a margin threshold relative to baseline.
+  closureThresholdADC = openEyeBaselineADC - REFLECTION_DELTA;
+
+  Serial.print("✅ Open-Eye Baseline ADC:  ");
+  Serial.println(openEyeBaselineADC);
+  Serial.print("✅ Calibrated Closure Level: ");
+  Serial.println(closureThresholdADC);
+  Serial.println("==================================================\n");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  pinMode(IR_AO_PIN, INPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
+
+  // Configure ESP32 ADC Resolution
+  analogReadResolution(12); // 0 - 4095 range
+  analogSetAttenuation(ADC_11db); // Full 0V - 3.3V range
+
+  // Power-on chime
+  setBuzzer(true);
+  delay(150);
+  setBuzzer(false);
+
+  // Auto-calibrate baseline with eye open
+  calibrateOpenEyeBaseline();
+
+  windowStartTime = millis();
+}
+
+void loop() {
+  unsigned long currentMillis = millis();
+
+  // 1. Read Analog Signal from AO (GPIO 34)
+  int rawADC = analogRead(IR_AO_PIN);
+  unsigned long closureDuration = 0;
+
+  // Evaluate if ADC drifted past calibrated threshold (Eyelid closed)
+  bool eyeCurrentlyClosed = (rawADC < closureThresholdADC);
+
+  if (eyeCurrentlyClosed) {
+    if (!isEyeClosed) {
+      isEyeClosed = true;
+      eyeClosedStartTime = currentMillis;
+      blinkCountInWindow++;
+    } else {
+      closureDuration = currentMillis - eyeClosedStartTime;
+    }
+  } else {
+    isEyeClosed = false;
+  }
+
+  // 2. Alarm Control (> 2.0 Seconds Closure)
+  bool alarmActive = (isEyeClosed && closureDuration >= DROWSY_ALARM_MS);
+  setBuzzer(alarmActive);
+
+  // 3. Calculate BPM Every 10 Seconds
+  if (currentMillis - windowStartTime >= 10000) {
+    currentBPM = blinkCountInWindow * 6; // Extrapolate 10s sample to 60s
+    blinkCountInWindow = 0;
+    windowStartTime = currentMillis;
+  }
+
+  // 4. Real-time Diagnostic Stream (Every 250 ms)
+  if (currentMillis - lastLogTime >= 250) {
+    lastLogTime = currentMillis;
+
+    if (alarmActive) {
+      Serial.print("🚨 [ALARM ACTIVE!] ");
+    } else {
+      Serial.print("🟢 [NORMAL]        ");
+    }
+
+    Serial.print("Raw ADC: ");
+    Serial.print(rawADC);
+    Serial.print(" / ");
+    Serial.print(openEyeBaselineADC);
+
+    Serial.print(" | Eye: ");
+    if (eyeCurrentlyClosed) {
+      Serial.print("CLOSED (");
+      Serial.print(closureDuration);
+      Serial.print(" ms)");
+    } else {
+      Serial.print("OPEN          ");
+    }
+
+    Serial.print(" | Blink Rate: ");
+    Serial.print(currentBPM);
+    Serial.println(" BPM");
+  }
+
+  delay(20); // 50 Hz sampling loop
+}
