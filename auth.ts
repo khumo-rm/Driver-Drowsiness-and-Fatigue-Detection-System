@@ -1,11 +1,14 @@
 import type { NextFunction, Request, Response } from 'express';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { promisify } from 'node:util';
 import { SignJWT, jwtVerify } from 'jose';
 import { config } from './config.js';
 import { pool } from './db.js';
 import { AppError } from './errors.js';
 
 const key = new TextEncoder().encode(config.JWT_SECRET);
+const scryptAsync = promisify(scryptCb);
+const API_KEY_DERIVED_KEY_LENGTH = 64;
 
 export async function issueToken(userId: string, role: string) {
   return new SignJWT({ role }).setProtectedHeader({ alg: 'HS256' })
@@ -25,7 +28,26 @@ export async function requireUser(req: Request, _res: Response, next: NextFuncti
   }
 }
 
-export const hashApiKey = (value: string) => createHash('sha256').update(value).digest('hex');
+export const hashApiKey = async (value: string) => {
+  const salt = randomBytes(16);
+  const derived = await scryptAsync(value, salt, API_KEY_DERIVED_KEY_LENGTH) as Buffer;
+  return `scrypt$${salt.toString('hex')}$${derived.toString('hex')}`;
+};
+
+const verifyApiKeyHash = async (value: string, storedHash: string) => {
+  if (storedHash.startsWith('scrypt$')) {
+    const [, saltHex, derivedHex] = storedHash.split('$');
+    if (!saltHex || !derivedHex) return false;
+    const salt = Buffer.from(saltHex, 'hex');
+    const expected = Buffer.from(derivedHex, 'hex');
+    const supplied = await scryptAsync(value, salt, expected.length) as Buffer;
+    return supplied.length === expected.length && timingSafeEqual(supplied, expected);
+  }
+
+  const suppliedLegacy = Buffer.from(createHash('sha256').update(value).digest('hex'));
+  const storedLegacy = Buffer.from(storedHash);
+  return suppliedLegacy.length === storedLegacy.length && timingSafeEqual(suppliedLegacy, storedLegacy);
+};
 
 export async function requireDevice(req: Request, _res: Response, next: NextFunction) {
   try {
@@ -35,9 +57,8 @@ export async function requireDevice(req: Request, _res: Response, next: NextFunc
     const result = await pool.query('SELECT id, owner_id, api_key_hash, status FROM devices WHERE serial_number=$1', [serial]);
     const device = result.rows[0];
     if (!device || device.status !== 'ACTIVE') throw new AppError(401, 'Unknown or inactive device', 'DEVICE_UNAUTHENTICATED');
-    const supplied = Buffer.from(hashApiKey(apiKey));
-    const stored = Buffer.from(device.api_key_hash);
-    if (supplied.length !== stored.length || !timingSafeEqual(supplied, stored)) throw new AppError(401, 'Invalid device key', 'DEVICE_UNAUTHENTICATED');
+    const valid = await verifyApiKeyHash(apiKey, device.api_key_hash);
+    if (!valid) throw new AppError(401, 'Invalid device key', 'DEVICE_UNAUTHENTICATED');
     req.device = { id: device.id, ownerId: device.owner_id };
     next();
   } catch (error) { next(error); }
