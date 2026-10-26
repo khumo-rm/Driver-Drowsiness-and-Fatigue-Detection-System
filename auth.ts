@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from 'express';
-import { createHash, randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
+import { randomBytes, scrypt as scryptCb, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { SignJWT, jwtVerify } from 'jose';
 import { config } from './config.js';
@@ -44,9 +44,7 @@ const verifyApiKeyHash = async (value: string, storedHash: string) => {
     return supplied.length === expected.length && timingSafeEqual(supplied, expected);
   }
 
-  const suppliedLegacy = Buffer.from(createHash('sha256').update(value).digest('hex'));
-  const storedLegacy = Buffer.from(storedHash);
-  return suppliedLegacy.length === storedLegacy.length && timingSafeEqual(suppliedLegacy, storedLegacy);
+  return false;
 };
 
 export async function requireDevice(req: Request, _res: Response, next: NextFunction) {
