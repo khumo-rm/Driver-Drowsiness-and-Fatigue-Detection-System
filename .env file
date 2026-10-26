@@ -1,0 +1,10 @@
+NODE_ENV=development
+PORT=4000
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/anti_sleep
+JWT_SECRET=replace-with-at-least-32-random-characters
+JWT_ISSUER=anti-sleep-api
+CORS_ORIGIN=http://localhost:5173
+MQTT_ENABLED=false
+MQTT_URL=mqtt://localhost:1883
+MQTT_USERNAME=
+MQTT_PASSWORD=
